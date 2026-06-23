@@ -2,18 +2,16 @@ const express = require('express');
 const axios = require('axios');
 const app = express();
 
-// Render tự động cấp PORT qua biến môi trường, mặc định là 3000 nếu chạy local
-const PORT = process.env.PORT || 3000;
-
+const PORT = process.env.PORT || 8000;
 app.use(express.json());
 
-// Định nghĩa Endpoint API của bạn
-app.get('/api/zalopay-history', async (req, res) => {
+const DEFAULT_COOKIE = '_ga=GA1.1.859283574.1763961477; _ga_XWW4JEB21X=GS2.1.s1782218304$o256$g1$t1782218311$j53$l0$h0; X-DRSITE=off; zalo_id=; zlp_token=3vSqzAySPUYc5s4UpgYb6KyWUHbfrPxzYuZE6C3SD2VYVFMAd7RQpXk6Z8xPJdkzGfpu3AtireHP5jnmDjKsjbvgPjvJdyk8Zy7nWcrHFocYEyyP2DDAsCmuKVcrXwXAT1mfsHY5n3wg4iNJAQ5272qfQDfjmXQoNSi7pzNdpkzG34M36jYm6; has_device_id=0';
+
+// LINK MỚI GỌN GÀNG ĐỂ LẤY DỮ LIỆU NHẬN TIỀN
+app.get('/api/zalopay-clean', async (req, res) => {
     const url = 'https://sapi.zalopay.vn/v2/history/transactions';
-    
-    // Lấy page_token từ URL request nếu có (ví dụ: /api/zalopay-history?page_token=xxx)
-    // Nếu không truyền, mặc định sẽ lấy token bạn cung cấp bên dưới
     const pageToken = req.query.page_token || 'eyJPZmZzZXQiOjE3NzYxNTEzMzg3Mjl9';
+    const customCookie = req.query.cookie || DEFAULT_COOKIE;
 
     const config = {
         method: 'get',
@@ -35,32 +33,59 @@ app.get('/api/zalopay-history', async (req, res) => {
             'Referer': 'https://social.zalopay.vn/spa/v2/history?main-app=true',
             'x-platform': 'ZPA',
             'Connection': 'keep-alive',
-            'Cookie': '_ga=GA1.1.859283574.1763961477; _ga_XWW4JEB21X=GS2.1.s1782218304$o256$g1$t1782218311$j53$l0$h0; X-DRSITE=off; zalo_id=; zlp_token=3vSqzAySPUYc5s4UpgYb6KyWUHbfrPxzYuZE6C3SD2VYVFMAd7RQpXk6Z8xPJdkzGfpu3AtireHP5jnmDjKsjbvgPjvJdyk8Zy7nWcrHFocYEyyP2DDAsCmuKVcrXwXAT1mfsHY5n3wg4iNJAQ5272qfQDfjmXQoNSi7pzNdpkzG34M36jYm6; has_device_id=0',
+            'Cookie': customCookie,
             'Sec-Fetch-Dest': 'empty'
         }
     };
 
     try {
         const response = await axios(config);
-        // Trả về dữ liệu gốc từ ZaloPay cho client của bạn
-        res.status(200).json({
-            success: true,
-            data: response.data
-        });
+        
+        // Kiểm tra nếu cấu trúc ZaloPay trả về hợp lệ và có mảng giao dịch
+        if (response.data && response.data.data && response.data.data.transactions) {
+            const rawTransactions = response.data.data.transactions;
+            
+            // Bóc tách dữ liệu theo đúng ý mày (Chỉ lọc các giao dịch nhận tiền)
+            const cleanData = rawTransactions
+                .filter(tx => tx.sign === "+") // Chỉ lấy giao dịch NHẬN TIỀN (+)
+                .map(tx => {
+                    // Định dạng lại thời gian từ timestamp sang ngày giờ đọc được
+                    const date = new Date(tx.time);
+                    const formattedTime = date.toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
+
+                    return {
+                        trans_id: tx.trans_id,       // Mã giao dịch để check trùng
+                        nguoi_chuyen: tx.partner_name || "Không rõ",
+                        so_tien: tx.amount || 0,
+                        noi_dung: tx.description || "",
+                        thoi_gian: formattedTime
+                    };
+                });
+
+            // Trả về kết quả đã được rút gọn siêu đẹp
+            return res.status(200).json({
+                success: true,
+                total: cleanData.length,
+                transactions: cleanData
+            });
+        } else {
+            return res.status(200).json({ success: true, total: 0, transactions: [], message: "Không tìm thấy giao dịch nào" });
+        }
+
     } catch (error) {
         res.status(error.response ? error.response.status : 500).json({
             success: false,
-            message: error.message,
-            error: error.response ? error.response.data : null
+            message: "Lỗi kết nối ZaloPay hoặc Token/Cookie đã hết hạn!",
+            error: error.message
         });
     }
 });
 
-// Endpoint kiểm tra trạng thái hoạt động của API
+// Giữ lại link cũ phòng khi mày cần dùng dữ liệu gốc
 app.get('/', (req, res) => {
-    res.send('ZaloPay API Gateway đang chạy mượt mà!');
+    res.send('ZaloPay API Gateway đang chạy ngon lành! Hãy dùng endpoint: /api/zalopay-clean');
 });
 
 app.listen(PORT, () => {
-    console.log(`Server đang chạy tại port ${PORT}`);
+    console.log(`API đang chạy tại port ${PORT}`);
 });
